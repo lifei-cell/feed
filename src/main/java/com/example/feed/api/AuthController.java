@@ -4,7 +4,10 @@ import com.example.feed.service.AccountVerificationService;
 import com.example.feed.service.AccountVerificationService.VerificationResponse;
 import com.example.feed.service.AuthService;
 import com.example.feed.service.AuthService.AuthTokens;
+import com.example.feed.security.RefreshCookieService;
+import com.example.feed.security.CurrentUser;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
@@ -13,6 +16,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.CookieValue;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -23,10 +27,15 @@ import org.springframework.web.bind.annotation.RestController;
 public class AuthController {
     private final AuthService auth;
     private final AccountVerificationService verification;
+    private final RefreshCookieService refreshCookies;
+    private final CurrentUser currentUser;
 
-    public AuthController(AuthService auth, AccountVerificationService verification) {
+    public AuthController(AuthService auth, AccountVerificationService verification,
+                          RefreshCookieService refreshCookies, CurrentUser currentUser) {
         this.auth = auth;
         this.verification = verification;
+        this.refreshCookies = refreshCookies;
+        this.currentUser = currentUser;
     }
 
     @PostMapping("/verification/register/request")
@@ -40,18 +49,22 @@ public class AuthController {
 
     @PostMapping("/register")
     @ResponseStatus(HttpStatus.CREATED)
-    public AuthTokens register(@Valid @RequestBody RegisterRequest request,
-                               HttpServletRequest servletRequest) {
-        return auth.registerVerified(request.username(), request.nickname(), request.password(),
+    public AuthSessionResponse register(@Valid @RequestBody RegisterRequest request,
+                                        HttpServletRequest servletRequest,
+                                        HttpServletResponse servletResponse) {
+        AuthTokens tokens = auth.registerVerified(request.username(), request.nickname(), request.password(),
                 request.channel(), request.target(), request.challengeId(), request.verificationCode(),
                 servletRequest.getRemoteAddr(), servletRequest.getHeader("User-Agent"));
+        return writeSession(tokens, servletResponse);
     }
 
     @PostMapping("/login")
-    public AuthTokens login(@Valid @RequestBody LoginRequest request,
-                            HttpServletRequest servletRequest) {
-        return auth.login(request.username(), request.password(),
+    public AuthSessionResponse login(@Valid @RequestBody LoginRequest request,
+                                     HttpServletRequest servletRequest,
+                                     HttpServletResponse servletResponse) {
+        AuthTokens tokens = auth.login(request.username(), request.password(),
                 servletRequest.getRemoteAddr(), servletRequest.getHeader("User-Agent"));
+        return writeSession(tokens, servletResponse);
     }
 
     @PostMapping("/password-reset/request")
@@ -69,20 +82,33 @@ public class AuthController {
     }
 
     @PostMapping("/refresh")
-    public AuthTokens refresh(@Valid @RequestBody RefreshRequest request) {
-        return auth.refresh(request.refreshToken());
+    public AuthSessionResponse refresh(
+            @CookieValue(name = "${feed.security.refresh-token.cookie.name:ff-refresh}",
+                    required = false) String refreshToken,
+            HttpServletResponse response) {
+        if (refreshToken == null || refreshToken.isBlank()) {
+            throw new com.example.feed.api.InvalidRefreshTokenException();
+        }
+        return writeSession(auth.refresh(refreshToken), response);
     }
 
     @PostMapping("/logout")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void logout(@AuthenticationPrincipal Jwt jwt) {
-        auth.logout(jwt.getClaimAsString("sid"), Long.parseLong(jwt.getSubject()));
+    public void logout(@AuthenticationPrincipal Jwt jwt, HttpServletResponse response) {
+        auth.logout(jwt.getClaimAsString("sid"), currentUser.id(jwt));
+        refreshCookies.clear(response);
     }
 
     @PostMapping("/revoke")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void revoke(@Valid @RequestBody RefreshRequest request) {
-        auth.revoke(request.refreshToken());
+    public void revoke(
+            @CookieValue(name = "${feed.security.refresh-token.cookie.name:ff-refresh}",
+                    required = false) String refreshToken,
+            HttpServletResponse response) {
+        if (refreshToken != null && !refreshToken.isBlank()) {
+            auth.revoke(refreshToken);
+        }
+        refreshCookies.clear(response);
     }
 
     public record RegistrationCodeRequest(
@@ -119,6 +145,16 @@ public class AuthController {
     ) {
     }
 
-    public record RefreshRequest(@NotBlank @Size(max = 512) String refreshToken) {
+    private AuthSessionResponse writeSession(AuthTokens tokens, HttpServletResponse response) {
+        refreshCookies.set(response, tokens.refreshToken(), tokens.refreshExpiresIn());
+        return AuthSessionResponse.from(tokens);
+    }
+
+    public record AuthSessionResponse(String accessToken, String tokenType, long expiresIn,
+                                      long userId, String username, String nickname) {
+        static AuthSessionResponse from(AuthTokens tokens) {
+            return new AuthSessionResponse(tokens.accessToken(), tokens.tokenType(), tokens.expiresIn(),
+                    tokens.userId(), tokens.username(), tokens.nickname());
+        }
     }
 }

@@ -31,7 +31,7 @@ export JWT_SECRET=replace-with-at-least-32-random-bytes
 docker compose up --build -d
 ```
 
-PowerShell 使用 `$env:JWT_SECRET='replace-with-at-least-32-random-bytes'`。仓库中的默认密钥只用于本地开发；部署时必须通过环境变量设置至少 32 字节的随机值。生产部署应同时设置 `SPRING_PROFILES_ACTIVE=prod` 和 `DEMO_DATA_ENABLED=false`；生产配置保护会拒绝默认 JWT 密钥、演示数据及验证码日志。启动后访问 `http://localhost:8080/`，可通过 `docker compose ps` 查看健康状态，通过 `docker compose logs -f app` 查看应用日志。
+PowerShell 使用 `$env:JWT_SECRET='replace-with-at-least-32-random-bytes'`。HMAC 仅用于本地开发。生产部署必须设置 `SPRING_PROFILES_ACTIVE=prod`、`DEMO_DATA_ENABLED=false`、`REFRESH_COOKIE_SECURE=true`，并选择 RSA 或 OIDC；生产配置保护会拒绝 HMAC、非安全 Refresh Cookie、演示数据及验证码日志。启动后访问 `http://localhost:8080/`，可通过 `docker compose ps` 查看健康状态，通过 `docker compose logs -f app` 查看 JSON 结构化日志。
 
 停止服务使用 `docker compose down`；数据库、Kafka、Redis 和 MinIO 媒体对象保存在命名卷中。只有明确需要删除全部本地数据时才使用 `docker compose down -v`。
 
@@ -39,7 +39,32 @@ PowerShell 使用 `$env:JWT_SECRET='replace-with-at-least-32-random-bytes'`。�
 
 Compose 默认把 MySQL 暴露在宿主机 `3307`，避免与常见的本机 MySQL `3306` 冲突；容器内仍使用 `3306`。可设置 `MYSQL_PORT`、`REDIS_PORT`、`KAFKA_PORT` 改变基础设施的宿主端口。Docker 内的应用始终通过服务名和容器端口连接，不受这些宿主端口变化影响。
 
-服务默认监听 `http://localhost:8080`，健康检查为 `GET /actuator/health`。
+服务默认监听 `http://localhost:8080`。Compose 将 Actuator 隔离到管理端口 `8081`，健康检查为 `GET http://localhost:8081/actuator/health`；生产环境应只允许监控网络访问该端口。
+
+### 生产身份配置
+
+内置登录采用 RSA 签名时，挂载 PKCS#8 私钥和 X.509 公钥，并设置：
+
+```bash
+JWT_MODE=RSA
+JWT_PUBLIC_KEY_LOCATION=file:/run/secrets/jwt-public.pem
+JWT_PRIVATE_KEY_LOCATION=file:/run/secrets/jwt-private.pem
+JWT_KEY_ID=friend-feed-2026-01
+JWT_AUDIENCE=friend-feed-api
+```
+
+接入外部身份提供方时，应用作为 OIDC Resource Server 验证令牌；此模式不签发本地令牌：
+
+```bash
+JWT_MODE=OIDC
+JWT_ISSUER=https://id.example.com/realms/friend-feed
+JWT_AUDIENCE=friend-feed-api
+JWT_USER_ID_CLAIM=uid
+JWT_ROLES_CLAIM=roles
+# 提供方不支持 discovery 时再设置 JWT_JWK_SET_URI
+```
+
+RSA 私钥只挂载给应用，不提交到仓库；轮换时先让验证端信任新公钥，再切换 `JWT_KEY_ID` 和私钥，最后等待旧 Access Token 过期后移除旧公钥。
 
 ## 联调演示数据
 
@@ -67,7 +92,7 @@ mvn spring-boot:run
 
 浏览器访问 `http://localhost:8080/`。本地开发可在 `frontend/` 中运行 `npm run dev`，Vite 会把 `/api` 和 `/actuator` 代理到 `http://localhost:8080`。
 
-前端包含注册登录、Feed 与稳定翻页、发布及附件、四种可见范围、点赞评论、用户搜索、好友申请、好友与黑名单、通知、个人资料，以及仅管理员可见的 Outbox 运维页。Access Token 与 Refresh Token 保存在浏览器 `localStorage`；请求收到 401 时会进行一次并发合并的自动刷新和重试。受保护媒体会先携带 Bearer Token 向后端鉴权，再使用短时签名地址读取对象，不会绕过动态可见性判断。
+前端包含注册登录、Feed 与稳定翻页、发布及附件、四种可见范围、点赞评论、用户搜索、好友申请、好友与黑名单、通知、个人资料，以及仅管理员可见的 Outbox/Kafka 死信运维页。短期 Access Token 保存在浏览器 `localStorage`；Refresh Token 仅存在于 `HttpOnly`、`SameSite=Strict`、路径限定为 `/api/auth` 的 Cookie 中，JavaScript 无法读取。请求收到 401 时会进行一次并发合并的自动刷新和重试。受保护媒体会先携带 Bearer Token 向后端鉴权，再使用短时签名地址读取对象，不会绕过动态可见性判断。
 
 ## API 示例
 
@@ -110,22 +135,22 @@ curl -X POST http://localhost:8080/api/auth/login \
 Authorization: Bearer ACCESS_TOKEN
 ```
 
-登录和注册响应还包含 `refreshToken`。刷新会同时返回新的 Access Token 和 Refresh Token，旧 Refresh Token 立即作废：
+登录和注册通过 `Set-Cookie` 写入 HttpOnly Refresh Cookie，响应体只返回 Access Token。刷新会轮换 Cookie，旧 Refresh Token 立即作废；命令行联调应使用 Cookie Jar：
 
 ```bash
-curl -X POST http://localhost:8080/api/auth/refresh \
+curl -c cookies.txt -X POST http://localhost:8080/api/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"refreshToken":"REFRESH_TOKEN"}'
+  -d '{"username":"alice","password":"alice-pass-123"}'
+curl -b cookies.txt -c cookies.txt -X POST http://localhost:8080/api/auth/refresh
 ```
 
-主动登出当前会话需要有效 Access Token；也可直接提交 Refresh Token 做幂等撤销（未知 Token 同样返回 204）：
+主动登出当前会话需要有效 Access Token；也可携带 Refresh Cookie 做幂等撤销：
 
 ```bash
 curl -X POST http://localhost:8080/api/auth/logout \
-  -H "Authorization: Bearer ACCESS_TOKEN"
-curl -X POST http://localhost:8080/api/auth/revoke \
-  -H "Content-Type: application/json" \
-  -d '{"refreshToken":"REFRESH_TOKEN"}'
+  -H "Authorization: Bearer ACCESS_TOKEN" \
+  -b cookies.txt
+curl -b cookies.txt -X POST http://localhost:8080/api/auth/revoke
 ```
 
 登录失败默认按账号 5 次、客户端地址 20 次进行 15 分钟窗口限流，触发后返回 `429` 和 `Retry-After`。可通过 `LOGIN_ACCOUNT_MAX_ATTEMPTS`、`LOGIN_ADDRESS_MAX_ATTEMPTS`、`LOGIN_RATE_WINDOW`、`LOGIN_BLOCK_DURATION` 调整；Redis 故障时自动退化为单实例内存限流。
@@ -251,7 +276,7 @@ npm run quality
 
 集成测试不再依赖本机 `3307` 端口，也不需要预先创建数据库。Failsafe 会在 `verify` 阶段运行 `*IntegrationTest`，Testcontainers 负责真实 MySQL/Kafka 的生命周期，因此本机或 CI 需要可用的 Docker Engine。
 
-完整 Compose 与浏览器冒烟测试会构建五个服务、等待健康检查，再使用 Playwright 登录演示账号；脚本使用独立 Compose Project，并在结束后清理对应容器和卷：
+完整 Compose 与浏览器冒烟测试会构建应用及基础设施、等待健康检查，再使用 Playwright 登录演示账号；脚本使用独立 Compose Project，并在结束后清理对应容器和卷：
 
 ```bash
 cd frontend
@@ -270,6 +295,8 @@ RUN_E2E=true bash scripts/compose-smoke.sh
 - `feed.fanout.initial-backoff` / `max-backoff`：指数退避下限与上限，默认 1 秒和 15 分钟。
 - `feed.fanout.processing-timeout`：`PROCESSING` / `DISPATCHED` 超时回收阈值，默认 2 分钟。
 - `feed.fanout.topic`：Kafka Topic，默认 `feed.post-published.v1`。
+- `feed.fanout.dlt-topic`：无法消费事件的 Kafka DLT，默认 `feed.post-published.v1.DLT`。
+- `feed.fanout.kafka-retry-attempts` / `kafka-retry-backoff`：进入 DLT 前的重试次数和间隔。
 
 Prometheus 指标在 `/actuator/prometheus` 输出：
 
@@ -277,6 +304,8 @@ Prometheus 指标在 `/actuator/prometheus` 输出：
 - `feed_outbox_failed`：FAILED 死信数。
 - `feed_outbox_oldest_age_seconds`：最老积压事件年龄。
 - `feed_outbox_processing_latency_seconds`：最近 5 分钟已完成事件的平均端到端延迟。
+- `feed_kafka_dead_letters_pending`：尚未处理的 Kafka 异常消息数。
+- `feed_kafka_dead_letters_oldest_age_seconds`：最老未处理异常消息的年龄。
 
 管理员可查看快照并重放死信事件：
 
@@ -286,9 +315,30 @@ curl http://localhost:8080/api/admin/outbox/metrics \
 
 curl -X POST http://localhost:8080/api/admin/outbox/123/replay \
   -H "Authorization: Bearer ADMIN_ACCESS_TOKEN"
+
+curl http://localhost:8080/api/admin/kafka-dead-letters?status=PENDING \
+  -H "Authorization: Bearer ADMIN_ACCESS_TOKEN"
+
+curl -X POST http://localhost:8080/api/admin/kafka-dead-letters/123/replay \
+  -H "Authorization: Bearer ADMIN_ACCESS_TOKEN"
+
+curl -X POST http://localhost:8080/api/admin/kafka-dead-letters/123/discard \
+  -H "Authorization: Bearer ADMIN_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"note":"invalid legacy payload"}'
 ```
 
-只有数据库 `users.role='ADMIN'` 的用户重新登录后签发的 JWT 才包含管理员角色。重放仅接受 `FAILED` 事件，会清零尝试次数并立即重新进入投递流程。
+只有数据库 `users.role='ADMIN'` 的用户重新登录后签发的 JWT 才包含管理员角色。Outbox 重放仅接受 `FAILED` 事件；Kafka DLT 支持查看原始主题/分区/偏移、重放到原主题或带审计备注丢弃。原消费者和 Inbox 唯一键共同保证重放幂等。
+
+## 可观测性与告警
+
+应用默认输出 JSON 结构化日志，每个 HTTP 响应返回 `X-Request-Id`，日志包含请求 ID、Trace ID、用户、状态码和耗时。Kafka 生产/消费启用 Micrometer Observation。启用本地 Prometheus、Alertmanager、OpenTelemetry Collector 与 Jaeger：
+
+```bash
+OTLP_TRACING_ENABLED=true docker compose --profile observability up --build -d
+```
+
+Prometheus、Alertmanager、Jaeger UI 默认分别位于 `9090`、`9093`、`16686`。采样率由 `TRACING_SAMPLING_PROBABILITY` 控制。告警覆盖服务不可用、HTTP 5xx、JVM 堆、Outbox 积压/失败和 Kafka DLT 积压/老化；处置步骤见 [`docs/runbooks/production-operations.md`](docs/runbooks/production-operations.md)。
 
 ## 混合扩散第三阶段
 
@@ -347,4 +397,4 @@ curl -X DELETE http://localhost:8080/api/admin/fanout-policies/10 \
 
 ## 当前范围
 
-本版采用带服务端会话撤销校验的短期 HS256 JWT、轮换式 Refresh Token、一次性邮箱/手机验证码、单 Kafka 集群，以及支持 S3/MinIO 直传和本地存储兼容的媒体层；同时包含自动策略、Redis 作者时间线、影子校验和可恢复异步历史回填的 PUSH/PULL 混合扩散。尚未包含 CDN、内容审核、自动策略触发历史回填和 Inbox 分片归档。生产环境若拆分多个独立服务，建议迁移到独立身份服务和非对称密钥签名，并把 Kafka Topic 副本数提升到至少 3。
+本版支持本地 HMAC、生产 RSA 签名和外部 OIDC/JWK 验证；Refresh Token 使用 HttpOnly Cookie、轮换与令牌族重放防护。运行链路具备 JSON 日志、请求关联、OTLP Trace、Prometheus 告警、Runbook，以及 Kafka 重试、DLT 持久化、管理员重放/丢弃审计。业务侧包含自动策略、Redis 作者时间线、影子校验和可恢复异步历史回填的 PUSH/PULL 混合扩散。尚未包含 CDN、内容审核、自动策略触发历史回填和 Inbox 分片归档；生产 Kafka 应部署多 Broker，并把业务 Topic 和 DLT 副本数提升到至少 3。

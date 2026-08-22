@@ -1,0 +1,62 @@
+groups:
+  - name: friend-feed-availability
+    rules:
+      - alert: FriendFeedDown
+        expr: up{job="friend-feed"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: Friend Feed is unavailable
+          runbook: docs/runbooks/production-operations.md#friendfeeddown
+      - alert: FriendFeedHighHttp5xxRate
+        expr: |
+          sum(rate(http_server_requests_seconds_count{job="friend-feed",status=~"5.."}[5m]))
+          /
+          clamp_min(sum(rate(http_server_requests_seconds_count{job="friend-feed"}[5m])), 0.001)
+          > 0.05
+        for: 10m
+        labels: { severity: critical }
+        annotations:
+          summary: HTTP 5xx ratio is above 5%
+          runbook: docs/runbooks/production-operations.md#friendfeedhighhttp5xxrate
+      - alert: FriendFeedJvmHeapPressure
+        expr: |
+          sum(jvm_memory_used_bytes{job="friend-feed",area="heap"})
+          /
+          sum(jvm_memory_max_bytes{job="friend-feed",area="heap"}) > 0.85
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: JVM heap usage is above 85%
+          runbook: docs/runbooks/production-operations.md#friendfeedjvmheappressure
+
+  - name: friend-feed-async-pipeline
+    rules:
+      - alert: FriendFeedOutboxBacklog
+        expr: feed_outbox_backlog > 100
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: Outbox backlog exceeds 100 events
+          runbook: docs/runbooks/production-operations.md#friendfeedoutboxbacklog
+      - alert: FriendFeedOutboxFailed
+        expr: feed_outbox_failed > 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: Outbox has failed events
+          runbook: docs/runbooks/production-operations.md#friendfeedoutboxfailed
+      - alert: FriendFeedKafkaDeadLettersPending
+        expr: feed_kafka_dead_letters_pending > 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: Kafka DLT contains unresolved records
+          runbook: docs/runbooks/production-operations.md#friendfeedkafkadeadletterspending
+      - alert: FriendFeedKafkaDeadLetterAging
+        expr: feed_kafka_dead_letters_oldest_age_seconds > 1800
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: Kafka DLT has a record older than 30 minutes
+          runbook: docs/runbooks/production-operations.md#friendfeedkafkadeadletterspending

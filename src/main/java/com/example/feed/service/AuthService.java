@@ -152,6 +152,9 @@ public class AuthService {
 
     @Transactional
     public void logout(String sessionId, long userId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return;
+        }
         try {
             sessions.revoke(UUID.fromString(sessionId), userId, clock.instant());
         } catch (IllegalArgumentException exception) {

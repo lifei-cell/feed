@@ -6,6 +6,7 @@ import com.example.feed.repository.FanoutPolicyRepository;
 import com.example.feed.repository.FeedInboxRepository;
 import com.example.feed.repository.RelationshipRepository;
 import com.example.feed.repository.UserRepository;
+import com.example.feed.repository.KafkaDeadLetterRepository;
 import com.example.feed.service.PostService;
 import com.example.feed.service.FeedQueryService;
 import com.example.feed.service.OutboxDispatcher;
@@ -14,6 +15,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
@@ -54,6 +57,12 @@ class KafkaFanoutIntegrationTest {
     OutboxDispatcher dispatcher;
     @Autowired
     JdbcClient jdbc;
+    @Autowired
+    KafkaTemplate<String, String> kafka;
+    @Autowired
+    KafkaDeadLetterRepository deadLetters;
+    @Value("${feed.fanout.topic}")
+    String topic;
 
     @Test
     void outboxTravelsThroughKafkaAndFansOutExactlyOnce() throws Exception {
@@ -115,5 +124,26 @@ class KafkaFanoutIntegrationTest {
         assertThat(outboxState.get("status"))
                 .as("outbox state: %s", outboxState)
                 .isEqualTo("PROCESSED");
+    }
+
+    @Test
+    void poisonMessageIsCapturedInGovernedDeadLetterStore() throws Exception {
+        String key = "poison-" + UUID.randomUUID();
+        kafka.send(topic, key, "{not-valid-json").get();
+
+        Instant deadline = Instant.now().plus(Duration.ofSeconds(20));
+        while (Instant.now().isBefore(deadline)
+                && deadLetters.find("PENDING", 20).stream()
+                .noneMatch(item -> key.equals(item.messageKey()))) {
+            Thread.sleep(100);
+        }
+
+        assertThat(deadLetters.find("PENDING", 20))
+                .anySatisfy(item -> {
+                    assertThat(item.messageKey()).isEqualTo(key);
+                    assertThat(item.originalTopic()).isEqualTo(topic);
+                    assertThat(item.payload()).isEqualTo("{not-valid-json");
+                    assertThat(item.exceptionClass()).contains("Json");
+                });
     }
 }

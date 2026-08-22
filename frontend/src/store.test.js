@@ -51,6 +51,20 @@ describe('application store', () => {
     expect(isAdmin()).toBe(false)
   })
 
+  it('restores an access token from the HttpOnly refresh cookie on reload', async () => {
+    vi.spyOn(endpoints, 'refresh').mockResolvedValue({
+      accessToken: tokenWithClaims({ roles: ['USER'] }),
+    })
+    vi.spyOn(endpoints, 'me').mockResolvedValue({ id: 11, nickname: 'Cookie User' })
+    vi.spyOn(endpoints, 'notifications').mockResolvedValue({ unreadCount: 0 })
+
+    await bootstrapSession()
+
+    expect(endpoints.refresh).toHaveBeenCalledOnce()
+    expect(store.user.id).toBe(11)
+    expect(session.token).toBeTruthy()
+  })
+
   it('caches profiles and signed media URLs', async () => {
     vi.spyOn(endpoints, 'user').mockResolvedValue({ id: 12, nickname: 'Bob' })
     vi.spyOn(endpoints, 'mediaAccess').mockResolvedValue({

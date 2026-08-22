@@ -9,6 +9,10 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.UUID;
+import java.security.KeyPairGenerator;
+import java.util.Base64;
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.core.io.ResourceLoader;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -60,5 +64,37 @@ class JwtTokenServiceTest {
         assertThat(decoder.decode(encoded).getSubject()).isEqualTo("42");
         assertThatThrownBy(() -> decoder.decode(encoded))
                 .isInstanceOf(org.springframework.security.oauth2.jwt.JwtException.class);
+    }
+
+    @Test
+    void rsaTokenIsSignedWithPrivateKeyAndValidatedWithPublicKey() throws Exception {
+        var generator = KeyPairGenerator.getInstance("RSA");
+        generator.initialize(2048);
+        var keyPair = generator.generateKeyPair();
+        ResourceLoader resources = mock(ResourceLoader.class);
+        when(resources.getResource("memory:public")).thenReturn(new ByteArrayResource(
+                pem("PUBLIC KEY", keyPair.getPublic().getEncoded()).getBytes(java.nio.charset.StandardCharsets.US_ASCII)));
+        when(resources.getResource("memory:private")).thenReturn(new ByteArrayResource(
+                pem("PRIVATE KEY", keyPair.getPrivate().getEncoded()).getBytes(java.nio.charset.StandardCharsets.US_ASCII)));
+        SecurityConfig config = new SecurityConfig("RSA", "", "https://friend-feed.test",
+                "friend-feed-api", "sub", "roles", "memory:public", "memory:private", "",
+                "rsa-test-1", resources);
+        JwtTokenService tokens = new JwtTokenService(config.jwtEncoder(), Clock.systemUTC(),
+                "https://friend-feed.test", Duration.ofMinutes(15), true, "friend-feed-api");
+
+        String encoded = tokens.issue(
+                new AuthUser(42, "alice", "Alice", "not-exposed", "USER"), UUID.randomUUID())
+                .accessToken();
+        Jwt decoded = config.jwtDecoder().decode(encoded);
+
+        assertThat(decoded.getHeaders()).containsEntry("alg", "RS256");
+        assertThat(decoded.getAudience()).containsExactly("friend-feed-api");
+        assertThat(decoded.getSubject()).isEqualTo("42");
+    }
+
+    private static String pem(String type, byte[] encoded) {
+        return "-----BEGIN " + type + "-----\n"
+                + Base64.getMimeEncoder(64, "\n".getBytes()).encodeToString(encoded)
+                + "\n-----END " + type + "-----\n";
     }
 }

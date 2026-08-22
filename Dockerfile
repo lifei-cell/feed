@@ -6,5 +6,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && mkdir -p /app/data/media && chown -R feed:feed /app
 COPY --chown=feed:feed target/friend-feed-*.jar /app/app.jar
 USER feed
-EXPOSE 8080
+EXPOSE 8080 8081
 ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75.0", "-jar", "/app/app.jar"]

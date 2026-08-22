@@ -1,5 +1,4 @@
 const TOKEN_KEY = 'friend-feed.access-token'
-const REFRESH_TOKEN_KEY = 'friend-feed.refresh-token'
 let refreshInFlight = null
 
 export class ApiError extends Error {
@@ -19,16 +18,8 @@ export const session = {
     if (value) localStorage.setItem(TOKEN_KEY, value)
     else localStorage.removeItem(TOKEN_KEY)
   },
-  get refreshToken() {
-    return localStorage.getItem(REFRESH_TOKEN_KEY)
-  },
-  set refreshToken(value) {
-    if (value) localStorage.setItem(REFRESH_TOKEN_KEY, value)
-    else localStorage.removeItem(REFRESH_TOKEN_KEY)
-  },
   setTokens(value) {
     this.token = value?.accessToken
-    this.refreshToken = value?.refreshToken
   },
   claims() {
     const token = this.token
@@ -43,17 +34,15 @@ export const session = {
   },
   clear() {
     this.token = null
-    this.refreshToken = null
   },
 }
 
 async function refreshSession() {
-  if (!session.refreshToken) throw new ApiError(401, '登录已过期，请重新登录')
   if (!refreshInFlight) {
     refreshInFlight = fetch('/api/auth/refresh', {
       method: 'POST',
-      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken: session.refreshToken }),
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' },
     }).then(async (response) => {
       if (!response.ok) throw new ApiError(response.status, '登录已过期，请重新登录')
       const result = await response.json()
@@ -77,14 +66,14 @@ export async function api(path, options = {}) {
 
   let response
   try {
-    response = await fetch(path, { ...options, headers, body })
+    response = await fetch(path, { ...options, credentials: 'same-origin', headers, body })
   } catch {
     throw new ApiError(0, '无法连接服务器，请检查服务是否已启动')
   }
 
   if (!response.ok) {
     if (response.status === 401 && !path.startsWith('/api/auth/')
-        && !options._retried && session.refreshToken) {
+        && !options._retried) {
       try {
         await refreshSession()
         return api(path, { ...options, _retried: true })
@@ -123,9 +112,9 @@ export const endpoints = {
   requestPasswordReset: (body) => api('/api/auth/password-reset/request', { method: 'POST', body }),
   confirmPasswordReset: (body) => api('/api/auth/password-reset/confirm', { method: 'POST', body }),
 
-  refresh: (body) => api('/api/auth/refresh', { method: 'POST', body }),
+  refresh: () => api('/api/auth/refresh', { method: 'POST' }),
   logout: () => api('/api/auth/logout', { method: 'POST' }),
-  revoke: (body) => api('/api/auth/revoke', { method: 'POST', body }),
+  revoke: () => api('/api/auth/revoke', { method: 'POST' }),
   me: () => api('/api/users/me'),
   updateMe: (body) => api('/api/users/me', { method: 'PATCH', body }),
   user: (id) => api(`/api/users/${id}`),
@@ -208,6 +197,16 @@ export const endpoints = {
   markAllNotificationsRead: () => api('/api/notifications/read-all', { method: 'PATCH' }),
   outboxMetrics: () => api('/api/admin/outbox/metrics'),
   replayOutbox: (id) => api(`/api/admin/outbox/${id}/replay`, { method: 'POST' }),
+  kafkaDeadLetters: (status = 'PENDING', size = 20) => {
+    const params = new URLSearchParams({ status, size })
+    return api(`/api/admin/kafka-dead-letters?${params}`)
+  },
+  replayKafkaDeadLetter: (id) => api(`/api/admin/kafka-dead-letters/${id}/replay`, {
+    method: 'POST',
+  }),
+  discardKafkaDeadLetter: (id, note) => api(`/api/admin/kafka-dead-letters/${id}/discard`, {
+    method: 'POST', body: { note },
+  }),
   fanoutPolicy: (authorId) => api(`/api/admin/fanout-policies/${authorId}`),
   setFanoutPolicy: (authorId, body) => api(`/api/admin/fanout-policies/${authorId}`, {
     method: 'PUT', body,

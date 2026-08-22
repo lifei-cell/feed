@@ -89,6 +89,12 @@ jobs:
       - run: npm run build
         working-directory: frontend
       - run: mvn -B -DskipTests package
+      - name: Validate production Compose and alert rules
+        run: |
+          docker compose --profile observability config -q
+          docker run --rm -v "$PWD/monitoring:/work:ro" --entrypoint promtool prom/prometheus:v3.5.0 check rules /work/alerts.yml
+          docker run --rm -v "$PWD/monitoring:/work:ro" --entrypoint amtool prom/alertmanager:v0.28.1 check-config /work/alertmanager.yml
+          docker run --rm -v "$PWD/monitoring:/work:ro" otel/opentelemetry-collector-contrib:0.130.1 validate --config=/work/otel-collector.yml
       - run: npx playwright install --with-deps chromium
         working-directory: frontend
       - name: Run Compose smoke and browser E2E

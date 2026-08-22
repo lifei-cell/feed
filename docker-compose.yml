@@ -11,9 +11,30 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       KAFKA_BOOTSTRAP_SERVERS: kafka:19092
+      FANOUT_DLT_TOPIC: ${FANOUT_DLT_TOPIC:-feed.post-published.v1.DLT}
+      FANOUT_KAFKA_RETRY_ATTEMPTS: ${FANOUT_KAFKA_RETRY_ATTEMPTS:-2}
+      FANOUT_KAFKA_RETRY_BACKOFF: ${FANOUT_KAFKA_RETRY_BACKOFF:-1s}
       JWT_SECRET: ${JWT_SECRET:-local-development-secret-change-before-production}
+      JWT_MODE: ${JWT_MODE:-HMAC}
+      JWT_ISSUER: ${JWT_ISSUER:-https://friend-feed.local}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-}
+      JWT_USER_ID_CLAIM: ${JWT_USER_ID_CLAIM:-sub}
+      JWT_ROLES_CLAIM: ${JWT_ROLES_CLAIM:-roles}
+      JWT_PUBLIC_KEY_LOCATION: ${JWT_PUBLIC_KEY_LOCATION:-}
+      JWT_PRIVATE_KEY_LOCATION: ${JWT_PRIVATE_KEY_LOCATION:-}
+      JWT_JWK_SET_URI: ${JWT_JWK_SET_URI:-}
+      JWT_KEY_ID: ${JWT_KEY_ID:-friend-feed-1}
       JWT_TTL: ${JWT_TTL:-15m}
       REFRESH_TOKEN_TTL: ${REFRESH_TOKEN_TTL:-30d}
+      REFRESH_COOKIE_NAME: ${REFRESH_COOKIE_NAME:-ff-refresh}
+      REFRESH_COOKIE_DOMAIN: ${REFRESH_COOKIE_DOMAIN:-}
+      REFRESH_COOKIE_SECURE: ${REFRESH_COOKIE_SECURE:-false}
+      REFRESH_COOKIE_SAME_SITE: ${REFRESH_COOKIE_SAME_SITE:-Strict}
+      MANAGEMENT_SERVER_PORT: 8081
+      LOG_STRUCTURED_FORMAT: ${LOG_STRUCTURED_FORMAT:-logstash}
+      TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-0.1}
+      OTLP_TRACING_ENABLED: ${OTLP_TRACING_ENABLED:-false}
+      OTLP_TRACING_ENDPOINT: ${OTLP_TRACING_ENDPOINT:-http://otel-collector:4318/v1/traces}
       AUTH_SESSION_RETENTION: ${AUTH_SESSION_RETENTION:-7d}
       LOGIN_ACCOUNT_MAX_ATTEMPTS: ${LOGIN_ACCOUNT_MAX_ATTEMPTS:-5}
       LOGIN_ADDRESS_MAX_ATTEMPTS: ${LOGIN_ADDRESS_MAX_ATTEMPTS:-20}
@@ -54,6 +75,7 @@ services:
       FEED_SHADOW_SAMPLE_RATE: ${FEED_SHADOW_SAMPLE_RATE:-1.0}
     ports:
       - "${SERVER_PORT:-8080}:8080"
+      - "${MANAGEMENT_PORT:-8081}:8081"
     volumes:
       - media-data:/app/data/media
     depends_on:
@@ -66,7 +88,7 @@ services:
       minio:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://localhost:8080/actuator/health | grep -q UP"]
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8081/actuator/health | grep -q UP"]
       interval: 10s
       timeout: 5s
       retries: 18
@@ -147,9 +169,58 @@ services:
       retries: 30
     restart: unless-stopped
 
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    profiles: [observability]
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus"]
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/rules/friend-feed.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      app:
+        condition: service_healthy
+      alertmanager:
+        condition: service_started
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    profiles: [observability]
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - "${ALERTMANAGER_PORT:-9093}:9093"
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.130.1
+    profiles: [observability]
+    command: ["--config=/etc/otelcol-contrib/config.yml"]
+    volumes:
+      - ./monitoring/otel-collector.yml:/etc/otelcol-contrib/config.yml:ro
+    ports:
+      - "${OTLP_GRPC_PORT:-4317}:4317"
+      - "${OTLP_HTTP_PORT:-4318}:4318"
+    depends_on:
+      jaeger:
+        condition: service_started
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.68.0
+    profiles: [observability]
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "${JAEGER_UI_PORT:-16686}:16686"
+
 volumes:
   mysql-data:
   redis-data:
   kafka-data:
   media-data:
   minio-data:
+  prometheus-data:
+  alertmanager-data:

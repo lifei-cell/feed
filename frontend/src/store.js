@@ -38,12 +38,10 @@ export function clearSession() {
 
 export async function bootstrapSession() {
   store.claims = session.claims()
-  if (!session.token && !session.refreshToken) {
-    clearSession()
-    store.ready = true
-    return
-  }
   try {
+    if (!session.token) {
+      setSession(await endpoints.refresh())
+    }
     store.user = await endpoints.me()
     store.profileCache.set(store.user.id, store.user)
     await refreshUnread()

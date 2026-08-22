@@ -13,14 +13,14 @@ describe('API client', () => {
     session.clear()
   })
 
-  it('stores both tokens and decodes access-token claims', () => {
+  it('stores only the access token and decodes its claims', () => {
     const payload = btoa(JSON.stringify({ sub: '7', roles: ['ADMIN'] }))
       .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
 
     session.setTokens({ accessToken: `header.${payload}.signature`, refreshToken: 'refresh-1' })
 
     expect(session.token).toContain(payload)
-    expect(session.refreshToken).toBe('refresh-1')
+    expect(localStorage.getItem('friend-feed.refresh-token')).toBeNull()
     expect(session.claims()).toEqual({ sub: '7', roles: ['ADMIN'] })
   })
 
@@ -38,7 +38,7 @@ describe('API client', () => {
   })
 
   it('merges concurrent refreshes and retries both requests once', async () => {
-    session.setTokens({ accessToken: 'expired', refreshToken: 'refresh-1' })
+    session.setTokens({ accessToken: 'expired' })
     let releaseRefresh
     const pendingRefresh = new Promise((resolve) => { releaseRefresh = resolve })
     const attempts = new Map()
@@ -54,14 +54,16 @@ describe('API client', () => {
     await vi.waitFor(() => {
       expect(fetchMock.mock.calls.filter(([path]) => path === '/api/auth/refresh')).toHaveLength(1)
     })
-    releaseRefresh(jsonResponse({ accessToken: 'fresh', refreshToken: 'refresh-2' }))
+    releaseRefresh(jsonResponse({ accessToken: 'fresh' }))
 
     await expect(Promise.all([feed, profile])).resolves.toEqual([
       { path: '/api/feed' },
       { path: '/api/users/me' },
     ])
     expect(session.token).toBe('fresh')
-    expect(session.refreshToken).toBe('refresh-2')
+    const [, refreshOptions] = fetchMock.mock.calls.find(([path]) => path === '/api/auth/refresh')
+    expect(refreshOptions.credentials).toBe('same-origin')
+    expect(refreshOptions.body).toBeUndefined()
   })
 
   it('normalizes network failures', async () => {

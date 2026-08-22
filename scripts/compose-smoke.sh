@@ -16,7 +16,7 @@ trap cleanup EXIT
 
 docker compose config -q
 docker compose up --build --detach --wait --wait-timeout "$compose_wait_timeout"
-curl --fail --silent --show-error http://127.0.0.1:8080/actuator/health >/dev/null
+curl --fail --silent --show-error http://127.0.0.1:8081/actuator/health >/dev/null
 
 if [[ "${RUN_E2E:-false}" == "true" ]]; then
   npm --prefix frontend run test:e2e

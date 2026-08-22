@@ -8,22 +8,26 @@ import org.springframework.stereotype.Component;
 /** Rejects local-only security defaults when the production profile is active. */
 @Component
 public class ProductionConfigurationGuard {
-    static final String LOCAL_JWT_SECRET = "local-development-secret-change-before-production";
-
     private final Environment environment;
-    private final String jwtSecret;
     private final boolean demoDataEnabled;
     private final boolean verificationCodeLoggingEnabled;
+    private final String jwtMode;
+    private final boolean refreshCookieSecure;
+    private final String refreshCookieSameSite;
 
     public ProductionConfigurationGuard(
             Environment environment,
-            @Value("${feed.security.jwt.secret:" + LOCAL_JWT_SECRET + "}") String jwtSecret,
             @Value("${feed.demo-data.enabled:false}") boolean demoDataEnabled,
-            @Value("${feed.security.verification.log-code:false}") boolean verificationCodeLoggingEnabled) {
+            @Value("${feed.security.verification.log-code:false}") boolean verificationCodeLoggingEnabled,
+            @Value("${feed.security.jwt.mode:HMAC}") String jwtMode,
+            @Value("${feed.security.refresh-token.cookie.secure:false}") boolean refreshCookieSecure,
+            @Value("${feed.security.refresh-token.cookie.same-site:Strict}") String refreshCookieSameSite) {
         this.environment = environment;
-        this.jwtSecret = jwtSecret;
         this.demoDataEnabled = demoDataEnabled;
         this.verificationCodeLoggingEnabled = verificationCodeLoggingEnabled;
+        this.jwtMode = jwtMode;
+        this.refreshCookieSecure = refreshCookieSecure;
+        this.refreshCookieSameSite = refreshCookieSameSite;
     }
 
     @PostConstruct
@@ -31,15 +35,21 @@ public class ProductionConfigurationGuard {
         if (!environment.matchesProfiles("prod")) {
             return;
         }
-        if (jwtSecret == null || jwtSecret.length() < 32 || LOCAL_JWT_SECRET.equals(jwtSecret)) {
+        if ("HMAC".equalsIgnoreCase(jwtMode)) {
             throw new IllegalStateException(
-                    "生产环境 JWT_SECRET 必须是至少 32 字节的随机值，且不能使用本地默认值");
+                    "生产环境 JWT_MODE 必须使用 RSA 或 OIDC，禁止共享密钥 HMAC");
         }
         if (demoDataEnabled) {
             throw new IllegalStateException("生产环境禁止启用 DEMO_DATA_ENABLED");
         }
         if (verificationCodeLoggingEnabled) {
             throw new IllegalStateException("生产环境禁止启用 VERIFICATION_LOG_CODE");
+        }
+        if (!refreshCookieSecure) {
+            throw new IllegalStateException("生产环境 REFRESH_COOKIE_SECURE 必须为 true");
+        }
+        if (!"Strict".equalsIgnoreCase(refreshCookieSameSite)) {
+            throw new IllegalStateException("生产环境 Refresh Cookie SameSite 必须为 Strict");
         }
     }
 }

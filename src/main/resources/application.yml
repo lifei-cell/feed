@@ -43,6 +43,9 @@ spring:
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
     listener:
       ack-mode: record
+      observation-enabled: true
+    template:
+      observation-enabled: true
   flyway:
     enabled: true
   jackson:
@@ -62,6 +65,12 @@ feed:
     max-scan-rounds: 10
   fanout:
     topic: ${FANOUT_TOPIC:feed.post-published.v1}
+    dlt-topic: ${FANOUT_DLT_TOPIC:feed.post-published.v1.DLT}
+    dlt-consumer-group: ${FANOUT_DLT_CONSUMER_GROUP:friend-feed-fanout-dlt-governance-v1}
+    dlt-capture-retry-delay: ${FANOUT_DLT_CAPTURE_RETRY_DELAY:5s}
+    kafka-retry:
+      attempts: ${FANOUT_KAFKA_RETRY_ATTEMPTS:2}
+      backoff: ${FANOUT_KAFKA_RETRY_BACKOFF:1s}
     dispatch-delay-ms: 300
     recovery-delay-ms: 10000
     batch-size: 50
@@ -122,11 +131,25 @@ feed:
       auto-create-bucket: ${MEDIA_S3_AUTO_CREATE_BUCKET:false}
   security:
     jwt:
+      mode: ${JWT_MODE:HMAC}
       issuer: ${JWT_ISSUER:https://friend-feed.local}
+      audience: ${JWT_AUDIENCE:}
+      user-id-claim: ${JWT_USER_ID_CLAIM:sub}
+      roles-claim: ${JWT_ROLES_CLAIM:roles}
       secret: ${JWT_SECRET:local-development-secret-change-before-production}
+      public-key-location: ${JWT_PUBLIC_KEY_LOCATION:}
+      private-key-location: ${JWT_PRIVATE_KEY_LOCATION:}
+      jwk-set-uri: ${JWT_JWK_SET_URI:}
+      key-id: ${JWT_KEY_ID:friend-feed-1}
       ttl: ${JWT_TTL:15m}
     refresh-token:
       ttl: ${REFRESH_TOKEN_TTL:30d}
+      cookie:
+        name: ${REFRESH_COOKIE_NAME:ff-refresh}
+        path: /api/auth
+        domain: ${REFRESH_COOKIE_DOMAIN:}
+        secure: ${REFRESH_COOKIE_SECURE:false}
+        same-site: ${REFRESH_COOKIE_SAME_SITE:Strict}
     session-retention: ${AUTH_SESSION_RETENTION:7d}
     session-cleanup-initial-delay-ms: 300000
     session-cleanup-delay-ms: 86400000
@@ -139,8 +162,27 @@ feed:
 server:
   port: ${SERVER_PORT:8080}
 
+logging:
+  structured:
+    format:
+      console: ${LOG_STRUCTURED_FORMAT:logstash}
+
 management:
+  server:
+    port: ${MANAGEMENT_SERVER_PORT:${SERVER_PORT:8080}}
   endpoints:
     web:
       exposure:
         include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLING_PROBABILITY:0.1}
+  otlp:
+    tracing:
+      export:
+        enabled: ${OTLP_TRACING_ENABLED:false}
+      endpoint: ${OTLP_TRACING_ENDPOINT:http://localhost:4318/v1/traces}

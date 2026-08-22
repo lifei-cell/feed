@@ -12,4 +12,10 @@ public class KafkaTopicConfig {
     NewTopic fanoutTopic(@Value("${feed.fanout.topic}") String topic) {
         return TopicBuilder.name(topic).partitions(6).replicas(1).build();
     }
+
+    @Bean
+    NewTopic fanoutDeadLetterTopic(
+            @Value("${feed.fanout.dlt-topic:${feed.fanout.topic}.DLT}") String topic) {
+        return TopicBuilder.name(topic).partitions(6).replicas(1).build();
+    }
 }

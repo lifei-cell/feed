@@ -17,7 +17,9 @@ const historyLimit = ref(100)
 const policy = ref(null)
 const savingPolicy = ref(false)
 const backfills = ref([])
+const kafkaDeadLetters = ref([])
 const busyJobId = ref('')
+const busyDeadLetterId = ref(0)
 let backfillPoller = null
 
 onMounted(() => {
@@ -29,17 +31,33 @@ onUnmounted(() => window.clearInterval(backfillPoller))
 async function load() {
   loading.value = true
   try {
-    const [outbox, autoPolicy, shadowRead, jobs] = await Promise.all([
+    const [outbox, autoPolicy, shadowRead, jobs, deadLetters] = await Promise.all([
       endpoints.outboxMetrics(), endpoints.fanoutAutomation(), endpoints.feedShadowMetrics(),
-      endpoints.fanoutBackfills(),
+      endpoints.fanoutBackfills(), endpoints.kafkaDeadLetters(),
     ])
     metrics.value = outbox
     automation.value = autoPolicy
     shadow.value = shadowRead
     backfills.value = jobs
+    kafkaDeadLetters.value = deadLetters
   }
   catch (error) { notify(error.message, 'error') }
   finally { loading.value = false }
+}
+
+async function resolveDeadLetter(record, action) {
+  busyDeadLetterId.value = record.id
+  try {
+    if (action === 'replay') {
+      await endpoints.replayKafkaDeadLetter(record.id)
+      notify(`Kafka 死信 ${record.id} 已投递回 ${record.originalTopic}`)
+    } else {
+      await endpoints.discardKafkaDeadLetter(record.id, 'confirmed as non-replayable by operator')
+      notify(`Kafka 死信 ${record.id} 已标记为丢弃`)
+    }
+    kafkaDeadLetters.value = kafkaDeadLetters.value.filter((item) => item.id !== record.id)
+  } catch (error) { notify(error.message, 'error') }
+  finally { busyDeadLetterId.value = 0 }
 }
 
 async function loadBackfills() {
@@ -151,6 +169,24 @@ function shortId(id) { return id?.slice(0, 8) }
     <section class="admin-replay card-surface">
       <div><span class="rail-icon"><UiIcon name="refresh" /></span><div><h2>重放 FAILED 事件</h2><p>仅 FAILED 状态的 Outbox 事件可以重放，尝试次数会被清零。</p></div></div>
       <form @submit.prevent="replay"><input v-model="eventId" type="number" min="1" placeholder="事件 ID" required><button class="primary-button" :disabled="replaying">{{ replaying ? '处理中…' : '确认重放' }}</button></form>
+    </section>
+    <section class="backfill-panel card-surface">
+      <div class="section-title"><div><h2>Kafka 异常消息</h2><p>消费重试耗尽后进入 DLT 并持久化，可审计重放或人工丢弃。</p></div></div>
+      <div v-if="!kafkaDeadLetters.length" class="empty-inline">暂无待处理 Kafka 死信</div>
+      <div v-else class="backfill-list">
+        <article v-for="record in kafkaDeadLetters" :key="record.id" class="backfill-job">
+          <div class="backfill-heading">
+            <div><strong>{{ record.originalTopic }} · P{{ record.originalPartition }} / O{{ record.originalOffset }}</strong><small>#{{ record.id }} · {{ record.exceptionClass || 'Unknown exception' }}</small></div>
+            <span class="status-pill job-failed">PENDING</span>
+          </div>
+          <p v-if="record.exceptionMessage" class="backfill-error">{{ record.exceptionMessage }}</p>
+          <div class="backfill-stats"><span>Key {{ record.messageKey || '-' }}</span><span>出现 {{ record.occurrenceCount }} 次</span><span>重放 {{ record.replayCount }} 次</span></div>
+          <div class="backfill-actions">
+            <button class="small-button primary-small" :disabled="busyDeadLetterId === record.id" @click="resolveDeadLetter(record, 'replay')">重放</button>
+            <button class="small-button danger" :disabled="busyDeadLetterId === record.id" @click="resolveDeadLetter(record, 'discard')">确认丢弃</button>
+          </div>
+        </article>
+      </div>
     </section>
     <section class="admin-replay admin-policy card-surface">
       <div><span class="rail-icon"><UiIcon name="people" /></span><div><h2>作者扩散策略</h2><p>切换立即影响后续发布，历史动态由可恢复后台任务分批迁移；留空回填数量表示处理全部历史。</p></div></div>
