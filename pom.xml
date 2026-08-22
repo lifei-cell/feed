@@ -20,7 +20,7 @@
     <properties>
         <java.version>21</java.version>
         <aws.sdk.version>2.48.1</aws.sdk.version>
-        <jacoco.version>0.8.13</jacoco.version>
+        <jacoco.version>0.8.15</jacoco.version>
         <coverage.minimum.line.ratio>0.35</coverage.minimum.line.ratio>
     </properties>
 
