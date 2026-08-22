@@ -33,7 +33,7 @@ jobs:
       - name: Verify committed frontend assets
         working-directory: .
         run: git diff --exit-code -- src/main/resources/static
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: frontend-coverage
@@ -50,7 +50,7 @@ jobs:
           java-version: 21
           cache: maven
       - run: mvn -B -DskipITs verify
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: backend-coverage
@@ -97,7 +97,7 @@ jobs:
           COMPOSE_PROJECT_NAME: friend-feed-ci-${{ github.run_id }}
           JWT_SECRET: ci-only-secret-with-at-least-32-random-bytes
         run: bash scripts/compose-smoke.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: compose-e2e-diagnostics
