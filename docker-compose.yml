@@ -4,7 +4,8 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
-      MYSQL_URL: jdbc:mysql://mysql:3306/feed?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-}
+      MYSQL_URL: jdbc:mysql://mysql:3306/feed?useUnicode=true&characterEncoding=utf8&connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true
       MYSQL_USER: feed
       MYSQL_PASSWORD: feed
       REDIS_HOST: redis

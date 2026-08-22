@@ -2,28 +2,30 @@ package com.example.feed.repository;
 
 import com.example.feed.domain.FanoutBackfillStatus;
 import com.example.feed.domain.FanoutMode;
+import com.example.feed.support.IntegrationContainers;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.jdbc.JdbcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 
 import java.time.Instant;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-@EnabledIfSystemProperty(named = "runMySqlIntegration", matches = "true")
-@JdbcTest(properties = {
-        "spring.datasource.url=jdbc:mysql://localhost:3307/feed?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC",
-        "spring.datasource.username=feed",
-        "spring.datasource.password=feed"
-})
+@JdbcTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Import(FanoutBackfillJobRepository.class)
 class FanoutBackfillJobRepositoryIntegrationTest {
+    @DynamicPropertySource
+    static void mysql(DynamicPropertyRegistry registry) {
+        IntegrationContainers.registerMySql(registry);
+    }
+
     @Autowired
     FanoutBackfillJobRepository jobs;
     @Autowired

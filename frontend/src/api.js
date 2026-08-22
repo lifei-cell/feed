@@ -99,7 +99,7 @@ export async function api(path, options = {}) {
     try {
       payload = contentType.includes('json') ? await response.json() : await response.text()
     } catch {
-      payload = null
+      // Keep the normalized fallback when an error response has no readable body.
     }
     const message = payload?.detail || payload?.message || (typeof payload === 'string' && payload)
       || `请求失败（${response.status}）`

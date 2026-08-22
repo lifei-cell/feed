@@ -31,7 +31,7 @@ export JWT_SECRET=replace-with-at-least-32-random-bytes
 docker compose up --build -d
 ```
 
-PowerShell 使用 `$env:JWT_SECRET='replace-with-at-least-32-random-bytes'`。仓库中的默认密钥只用于本地开发；部署时必须通过环境变量设置至少 32 字节的随机值。启动后访问 `http://localhost:8080/`，可通过 `docker compose ps` 查看健康状态，通过 `docker compose logs -f app` 查看应用日志。
+PowerShell 使用 `$env:JWT_SECRET='replace-with-at-least-32-random-bytes'`。仓库中的默认密钥只用于本地开发；部署时必须通过环境变量设置至少 32 字节的随机值。生产部署应同时设置 `SPRING_PROFILES_ACTIVE=prod` 和 `DEMO_DATA_ENABLED=false`；生产配置保护会拒绝默认 JWT 密钥、演示数据及验证码日志。启动后访问 `http://localhost:8080/`，可通过 `docker compose ps` 查看健康状态，通过 `docker compose logs -f app` 查看应用日志。
 
 停止服务使用 `docker compose down`；数据库、Kafka、Redis 和 MinIO 媒体对象保存在命名卷中。只有明确需要删除全部本地数据时才使用 `docker compose down -v`。
 
@@ -229,20 +229,38 @@ curl -X POST http://localhost:8080/api/posts \
 
 Compose 默认使用 MinIO；`http://localhost:9001` 是管理控制台。可通过 `MINIO_API_PORT`、`MINIO_CONSOLE_PORT`、`MINIO_ROOT_USER`、`MINIO_ROOT_PASSWORD` 调整本机配置。生产环境可设置 `MEDIA_S3_ENDPOINT`、`MEDIA_S3_PUBLIC_ENDPOINT`、`MEDIA_S3_BUCKET`、`MEDIA_S3_ACCESS_KEY`、`MEDIA_S3_SECRET_KEY` 对接兼容 S3 的私有桶；原有本地对象按每行记录的 `LOCAL` 提供方继续可读。
 
-## 测试
+## 工程质量与测试
 
 ```bash
+# 后端单元测试
 mvn test
+
+# 后端单元测试、JaCoCo 覆盖率门禁；跳过 Docker 集成测试
+mvn -DskipITs verify
+
+# 完整后端门禁；Testcontainers 自动启动 MySQL 8.4 和 Kafka
+mvn verify
+
+# 前端 ESLint、Vue 类型检查、Vitest 覆盖率和生产构建
+cd frontend
+npm ci
+npm run quality
 ```
 
-单元测试覆盖单源/复合 cursor 编解码、双来源重叠去重、不均衡来源连续翻页、权限过滤后的独立游标推进、PUSH/PULL 历史回填、删除/好友/拉黑后的权限原则，以及其他核心业务边界。
+单元测试覆盖单源/复合 cursor 编解码、双来源重叠去重、不均衡来源连续翻页、权限过滤后的独立游标推进、PUSH/PULL 历史回填、删除/好友/拉黑后的权限原则，以及其他核心业务边界。JaCoCo 在 `verify` 阶段检查后端行覆盖率；Vitest 对前端语句、分支、函数和行覆盖率设置不可回退的基线阈值。
 
-需要本机 `3307` 端口有测试 MySQL 时，可显式运行内嵌真实 Kafka Broker 的端到端用例：
+集成测试不再依赖本机 `3307` 端口，也不需要预先创建数据库。Failsafe 会在 `verify` 阶段运行 `*IntegrationTest`，Testcontainers 负责真实 MySQL/Kafka 的生命周期，因此本机或 CI 需要可用的 Docker Engine。
+
+完整 Compose 与浏览器冒烟测试会构建五个服务、等待健康检查，再使用 Playwright 登录演示账号；脚本使用独立 Compose Project，并在结束后清理对应容器和卷：
 
 ```bash
-mvn -DrunKafkaIntegration=true -Dtest=KafkaFanoutIntegrationTest test
-mvn -DrunMySqlIntegration=true -Dtest=OutboxRepositoryIntegrationTest test
+cd frontend
+npx playwright install chromium
+cd ..
+RUN_E2E=true bash scripts/compose-smoke.sh
 ```
+
+`.github/workflows/ci.yml` 在 Push 和 Pull Request 上执行前端质量门禁、后端单元测试、Testcontainers 集成测试以及 Compose + Playwright E2E；Pull Request 还会阻止引入高危依赖。Dependabot 每周检查 Maven、npm 和 GitHub Actions 更新。
 
 ## Outbox 与 Kafka 运维
 
@@ -329,4 +347,4 @@ curl -X DELETE http://localhost:8080/api/admin/fanout-policies/10 \
 
 ## 当前范围
 
-本版采用带服务端会话撤销校验的短期 HS256 JWT、轮换式 Refresh Token、一次性邮箱/手机验证码、单 Kafka 集群和单机文件系统媒体存储，并包含自动策略、Redis 作者时间线、影子校验和可恢复异步历史回填的 PUSH/PULL 混合扩散。尚未包含对象存储/CDN、内容审核、自动策略触发历史回填和 Inbox 分片归档。生产环境若有多个独立服务，建议迁移到独立身份服务和非对称密钥签名，媒体迁移到对象存储，并把 Kafka Topic 副本数提升到至少 3。
+本版采用带服务端会话撤销校验的短期 HS256 JWT、轮换式 Refresh Token、一次性邮箱/手机验证码、单 Kafka 集群，以及支持 S3/MinIO 直传和本地存储兼容的媒体层；同时包含自动策略、Redis 作者时间线、影子校验和可恢复异步历史回填的 PUSH/PULL 混合扩散。尚未包含 CDN、内容审核、自动策略触发历史回填和 Inbox 分片归档。生产环境若拆分多个独立服务，建议迁移到独立身份服务和非对称密钥签名，并把 Kafka Topic 副本数提升到至少 3。

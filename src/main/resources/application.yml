@@ -7,7 +7,7 @@ spring:
   application:
     name: friend-feed
   datasource:
-    url: ${MYSQL_URL:jdbc:mysql://localhost:3306/feed?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC}
+    url: ${MYSQL_URL:jdbc:mysql://localhost:3306/feed?useUnicode=true&characterEncoding=utf8&connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true}
     username: ${MYSQL_USER:feed}
     password: ${MYSQL_PASSWORD:feed}
     hikari:

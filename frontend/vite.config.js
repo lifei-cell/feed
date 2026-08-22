@@ -20,4 +20,23 @@ export default defineConfig({
     outDir: '../src/main/resources/static',
     emptyOutDir: true,
   },
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    include: ['src/**/*.test.js'],
+    exclude: ['e2e/**'],
+    setupFiles: ['./src/test/setup.js'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'html', 'lcov'],
+      include: ['src/**/*.{js,vue}'],
+      exclude: ['src/main.js', 'src/**/*.test.js', 'src/test/**'],
+      thresholds: {
+        lines: 20,
+        functions: 15,
+        branches: 20,
+        statements: 20,
+      },
+    },
+  },
 })

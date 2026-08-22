@@ -8,12 +8,14 @@ import com.example.feed.repository.RelationshipRepository;
 import com.example.feed.repository.UserRepository;
 import com.example.feed.service.PostService;
 import com.example.feed.service.FeedQueryService;
+import com.example.feed.service.OutboxDispatcher;
+import com.example.feed.support.IntegrationContainers;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.simple.JdbcClient;
-import org.springframework.kafka.test.context.EmbeddedKafka;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -22,18 +24,20 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-@EnabledIfSystemProperty(named = "runKafkaIntegration", matches = "true")
-@EmbeddedKafka(partitions = 1, topics = "feed.post-published.v1")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
-        "spring.datasource.url=jdbc:mysql://localhost:3307/feed?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC",
-        "spring.datasource.username=feed",
-        "spring.datasource.password=feed",
         "spring.kafka.admin.fail-fast=true",
         "feed.fanout.dispatch-delay-ms=50",
         "feed.fanout.recovery-delay-ms=100",
         "feed.security.jwt.secret=integration-test-secret-with-at-least-32-bytes"
 })
 class KafkaFanoutIntegrationTest {
+    @DynamicPropertySource
+    static void infrastructure(DynamicPropertyRegistry registry) {
+        IntegrationContainers.registerMySql(registry);
+        IntegrationContainers.registerKafka(registry);
+        IntegrationContainers.registerRedis(registry);
+    }
+
     @Autowired
     UserRepository users;
     @Autowired
@@ -46,6 +50,8 @@ class KafkaFanoutIntegrationTest {
     FanoutPolicyRepository fanoutPolicies;
     @Autowired
     FeedQueryService feed;
+    @Autowired
+    OutboxDispatcher dispatcher;
     @Autowired
     JdbcClient jdbc;
 
@@ -60,6 +66,7 @@ class KafkaFanoutIntegrationTest {
         var first = posts.publish(author, key, "through kafka", Visibility.ALL_FRIENDS, Set.of());
         var duplicate = posts.publish(author, key, "through kafka", Visibility.ALL_FRIENDS, Set.of());
         assertThat(duplicate.id()).isEqualTo(first.id());
+        dispatcher.dispatch();
 
         Instant deadline = Instant.now().plus(Duration.ofSeconds(20));
         while (Instant.now().isBefore(deadline)
@@ -85,6 +92,7 @@ class KafkaFanoutIntegrationTest {
 
         var post = posts.publish(author, UUID.randomUUID(), "pull through kafka",
                 Visibility.ALL_FRIENDS, Set.of());
+        dispatcher.dispatch();
 
         Instant deadline = Instant.now().plus(Duration.ofSeconds(20));
         while (Instant.now().isBefore(deadline)
@@ -100,7 +108,12 @@ class KafkaFanoutIntegrationTest {
                 .anyMatch(item -> item.id().equals(post.id()));
         assertThat(jdbc.sql("SELECT delivery_mode FROM posts WHERE id = :postId")
                 .param("postId", post.id()).query(String.class).single()).isEqualTo("PULL");
-        assertThat(jdbc.sql("SELECT status FROM outbox_events WHERE aggregate_id = :postId")
-                .param("postId", post.id()).query(String.class).single()).isEqualTo("PROCESSED");
+        var outboxState = jdbc.sql("""
+                        SELECT status, attempts, last_error, processor_id
+                          FROM outbox_events WHERE aggregate_id = :postId
+                        """).param("postId", post.id()).query().singleRow();
+        assertThat(outboxState.get("status"))
+                .as("outbox state: %s", outboxState)
+                .isEqualTo("PROCESSED");
     }
 }
