@@ -38,6 +38,13 @@
 - 若代码或数据已修复，调用 `POST /api/admin/kafka-dead-letters/{id}/replay`。原消费链路保持幂等，重复投递不会重复扩散。
 - 确认消息不可恢复后调用 `POST /api/admin/kafka-dead-letters/{id}/discard` 并填写原因。禁止直接删除 DLT 或数据库记录。
 
+## 自动扩散策略与回填
+
+- 调用 `GET /api/admin/fanout-policies/automation` 查看阈值和最近评估量；管理员手动执行使用 `POST /api/admin/fanout-policies/automation/run`。
+- 自动策略切换会原子创建全量历史回填任务。若 `blockedThisRun` 增长，先通过 `GET /api/admin/fanout-backfills?status=RUNNING` 检查同作者活动任务，不要绕过唯一约束直接改表。
+- `failuresThisRun` 或 `feed_fanout_auto_failed_total` 增长时，按作者 ID 检查应用日志、数据库事务异常和外键数据；失败作者会在后续扫描再次评估。
+- 调用 `GET /api/admin/fanout-policy-audits?authorId={id}&size=20` 核对变更前后模式、触发来源、操作者和关联回填任务。审计表为追加写，禁止更新或删除记录。
+
 ## JWT 与 OIDC
 
 - RSA 轮换：先让验证端同时信任新旧公钥，再切换签名私钥和 `kid`，至少等待一个 Access Token TTL 后移除旧公钥。

@@ -360,6 +360,9 @@ curl -X POST http://localhost:8080/api/admin/fanout-policies/10/switch \
 curl "http://localhost:8080/api/admin/fanout-backfills?authorId=10&size=20" \
   -H "Authorization: Bearer ADMIN_ACCESS_TOKEN"
 
+curl "http://localhost:8080/api/admin/fanout-policy-audits?authorId=10&size=20" \
+  -H "Authorization: Bearer ADMIN_ACCESS_TOKEN"
+
 curl -X POST http://localhost:8080/api/admin/fanout-backfills/BACKFILL_JOB_ID/pause \
   -H "Authorization: Bearer ADMIN_ACCESS_TOKEN"
 curl -X POST http://localhost:8080/api/admin/fanout-backfills/BACKFILL_JOB_ID/resume \
@@ -388,14 +391,15 @@ curl -X DELETE http://localhost:8080/api/admin/fanout-policies/10 \
 
 第三阶段增加自动策略、作者时间线缓存和影子读取：
 
-- 自动任务默认每分钟按有效好友数扫描作者。好友数达到 `10000` 自动设置 `PULL/AUTO`，下降到 `8000` 以下恢复默认 PUSH，中间区间保持现状以避免抖动。`MANUAL` 策略永远不会被自动任务覆盖。
+- 自动任务默认每分钟按有效好友数扫描作者。好友数达到 `10000` 自动设置 `PULL/AUTO`，下降到 `8000` 时恢复默认 PUSH，中间区间保持现状以避免抖动。`MANUAL` 策略永远不会被自动任务覆盖。
+- 自动升降级会在同一个数据库事务中锁定作者、切换策略、创建全量历史回填任务并追加审计。重复调度只刷新评估信息；已有活动回填时本轮延后，不会产生重复任务或半完成策略。
 - 阈值、批量大小与执行间隔可通过 `FANOUT_AUTO_PULL_THRESHOLD`、`FANOUT_AUTO_PUSH_THRESHOLD`、`FANOUT_AUTO_BATCH_SIZE`、`FANOUT_AUTO_DELAY_MS` 调整。
 - PULL 作者时间线缓存于 Redis Sorted Set，默认保留最近 500 条、TTL 5 分钟。缓存未命中、深分页或 Redis 故障时自动回源 MySQL；发布、Kafka 消费、删除和模式回填都会更新或失效缓存。
 - 首页按 `FEED_SHADOW_SAMPLE_RATE` 采样执行 MySQL 旧 Feed 影子读取，比较顺序、丢失项、额外项和重复项。差异只写日志和 Micrometer 指标，不影响主请求。
-- 管理员可调用 `POST /api/admin/fanout-policies/automation/run` 立即执行自动判定，调用 `GET /api/admin/feed-shadow/metrics` 查看影子读取结果；管理后台也展示这些数据。
+- 管理员可调用 `POST /api/admin/fanout-policies/automation/run` 立即执行自动判定，调用 `GET /api/admin/feed-shadow/metrics` 查看影子读取结果；管理后台同时展示自动回填统计和策略变更审计。审计接口支持 `authorId`、`triggerType`、`beforeId`、`size` 游标查询。
 
-默认生产阈值较高，本地验证可临时降低阈值。当前自动计算使用对称好友连接数；若产品升级为关注/粉丝模型，应改为粉丝数、活跃粉丝数和发布频率的组合评分。自动策略触发历史回填、完整策略变更审计查询和 Inbox 分片归档仍属于后续阶段。
+默认生产阈值较高，本地验证可临时降低阈值。当前自动计算使用对称好友连接数；若产品升级为关注/粉丝模型，应改为粉丝数、活跃粉丝数和发布频率的组合评分。Inbox 分片归档仍属于后续阶段。
 
 ## 当前范围
 
-本版支持本地 HMAC、生产 RSA 签名和外部 OIDC/JWK 验证；Refresh Token 使用 HttpOnly Cookie、轮换与令牌族重放防护。运行链路具备 JSON 日志、请求关联、OTLP Trace、Prometheus 告警、Runbook，以及 Kafka 重试、DLT 持久化、管理员重放/丢弃审计。业务侧包含自动策略、Redis 作者时间线、影子校验和可恢复异步历史回填的 PUSH/PULL 混合扩散。尚未包含 CDN、内容审核、自动策略触发历史回填和 Inbox 分片归档；生产 Kafka 应部署多 Broker，并把业务 Topic 和 DLT 副本数提升到至少 3。
+本版支持本地 HMAC、生产 RSA 签名和外部 OIDC/JWK 验证；Refresh Token 使用 HttpOnly Cookie、轮换与令牌族重放防护。运行链路具备 JSON 日志、请求关联、OTLP Trace、Prometheus 告警、Runbook，以及 Kafka 重试、DLT 持久化、管理员重放/丢弃审计。业务侧包含自动策略闭环、策略变更审计、Redis 作者时间线、影子校验和可恢复异步历史回填的 PUSH/PULL 混合扩散。尚未包含 CDN、内容审核和 Inbox 分片归档；生产 Kafka 应部署多 Broker，并把业务 Topic 和 DLT 副本数提升到至少 3。

@@ -5,6 +5,7 @@ import com.example.feed.repository.FanoutPolicyRepository.FanoutPolicy;
 import com.example.feed.service.FanoutPolicyService;
 import com.example.feed.service.FanoutPolicyService.FanoutSwitchResult;
 import com.example.feed.service.FanoutAutoPolicyJob;
+import com.example.feed.security.CurrentUser;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.PositiveOrZero;
@@ -29,10 +30,13 @@ import org.springframework.web.bind.annotation.RestController;
 public class FanoutPolicyAdminController {
     private final FanoutPolicyService policies;
     private final FanoutAutoPolicyJob automation;
+    private final CurrentUser currentUser;
 
-    public FanoutPolicyAdminController(FanoutPolicyService policies, FanoutAutoPolicyJob automation) {
+    public FanoutPolicyAdminController(FanoutPolicyService policies, FanoutAutoPolicyJob automation,
+                                       CurrentUser currentUser) {
         this.policies = policies;
         this.automation = automation;
+        this.currentUser = currentUser;
     }
 
     @GetMapping("/automation")
@@ -41,8 +45,8 @@ public class FanoutPolicyAdminController {
     }
 
     @PostMapping("/automation/run")
-    public FanoutAutoPolicyJob.Snapshot runAutomation() {
-        return automation.refresh();
+    public FanoutAutoPolicyJob.Snapshot runAutomation(@AuthenticationPrincipal Jwt jwt) {
+        return automation.refreshNow(currentUser.id(jwt));
     }
 
     @GetMapping("/{authorId}")
@@ -52,8 +56,9 @@ public class FanoutPolicyAdminController {
 
     @PutMapping("/{authorId}")
     public FanoutPolicy set(@PathVariable long authorId,
-                            @Valid @RequestBody UpdateFanoutPolicyRequest request) {
-        return policies.set(authorId, request.mode(), request.reason());
+                            @Valid @RequestBody UpdateFanoutPolicyRequest request,
+                            @AuthenticationPrincipal Jwt jwt) {
+        return policies.set(authorId, request.mode(), request.reason(), currentUser.id(jwt));
     }
 
     @PostMapping("/{authorId}/switch")
@@ -62,13 +67,13 @@ public class FanoutPolicyAdminController {
                                          @Valid @RequestBody SwitchFanoutPolicyRequest request,
                                          @AuthenticationPrincipal Jwt jwt) {
         return policies.switchMode(authorId, request.mode(), request.reason(),
-                request.historyLimit(), Long.parseLong(jwt.getSubject()));
+                request.historyLimit(), currentUser.id(jwt));
     }
 
     @DeleteMapping("/{authorId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void reset(@PathVariable long authorId) {
-        policies.reset(authorId);
+    public void reset(@PathVariable long authorId, @AuthenticationPrincipal Jwt jwt) {
+        policies.reset(authorId, currentUser.id(jwt));
     }
 
     public record UpdateFanoutPolicyRequest(

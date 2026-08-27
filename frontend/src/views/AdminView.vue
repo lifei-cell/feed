@@ -17,6 +17,10 @@ const historyLimit = ref(100)
 const policy = ref(null)
 const savingPolicy = ref(false)
 const backfills = ref([])
+const audits = ref([])
+const auditAuthorId = ref('')
+const auditTriggerType = ref('')
+const auditNextBeforeId = ref(null)
 const kafkaDeadLetters = ref([])
 const busyJobId = ref('')
 const busyDeadLetterId = ref(0)
@@ -31,15 +35,17 @@ onUnmounted(() => window.clearInterval(backfillPoller))
 async function load() {
   loading.value = true
   try {
-    const [outbox, autoPolicy, shadowRead, jobs, deadLetters] = await Promise.all([
+    const [outbox, autoPolicy, shadowRead, jobs, deadLetters, auditPage] = await Promise.all([
       endpoints.outboxMetrics(), endpoints.fanoutAutomation(), endpoints.feedShadowMetrics(),
-      endpoints.fanoutBackfills(), endpoints.kafkaDeadLetters(),
+      endpoints.fanoutBackfills(), endpoints.kafkaDeadLetters(), endpoints.fanoutPolicyAudits(),
     ])
     metrics.value = outbox
     automation.value = autoPolicy
     shadow.value = shadowRead
     backfills.value = jobs
     kafkaDeadLetters.value = deadLetters
+    audits.value = auditPage.items
+    auditNextBeforeId.value = auditPage.nextBeforeId
   }
   catch (error) { notify(error.message, 'error') }
   finally { loading.value = false }
@@ -65,11 +71,24 @@ async function loadBackfills() {
   catch { /* Keep background polling quiet; explicit refresh still reports errors. */ }
 }
 
+async function loadAudits(append = false) {
+  try {
+    const page = await endpoints.fanoutPolicyAudits(
+      auditAuthorId.value || null,
+      auditTriggerType.value || null,
+      append ? auditNextBeforeId.value : null,
+    )
+    audits.value = append ? [...audits.value, ...page.items] : page.items
+    auditNextBeforeId.value = page.nextBeforeId
+  } catch (error) { notify(error.message, 'error') }
+}
+
 async function runAutomation() {
   savingPolicy.value = true
   try {
     automation.value = await endpoints.runFanoutAutomation()
-    notify(`已评估 ${automation.value.evaluatedThisRun} 位作者，转为 PULL ${automation.value.promotedThisRun} 位`)
+    await Promise.all([loadBackfills(), loadAudits()])
+    notify(`已评估 ${automation.value.evaluatedThisRun} 位作者，创建回填 ${automation.value.backfillsCreatedThisRun} 个`)
   } catch (error) { notify(error.message, 'error') }
   finally { savingPolicy.value = false }
 }
@@ -108,6 +127,7 @@ async function savePolicy() {
     })
     policy.value = result.policy
     backfills.value = [result.backfillJob, ...backfills.value.filter((job) => job.id !== result.backfillJob.id)]
+    await loadAudits()
     notify(`策略已切换为 ${policyMode.value}，回填任务已创建，共 ${result.backfillJob.totalPosts} 条动态`)
   } catch (error) { notify(error.message, 'error') }
   finally { savingPolicy.value = false }
@@ -121,6 +141,7 @@ async function resetPolicy() {
     policy.value = null
     policyMode.value = 'PUSH'
     policyReason.value = ''
+    await loadAudits()
     notify(`用户 ${policyAuthorId.value} 已恢复默认 PUSH 扩散`)
   } catch (error) { notify(error.message, 'error') }
   finally { savingPolicy.value = false }
@@ -148,6 +169,8 @@ function progress(job) {
 }
 
 function shortId(id) { return id?.slice(0, 8) }
+function sourceLabel(source) { return source || 'DEFAULT' }
+function formatTime(value) { return value ? new Date(value).toLocaleString('zh-CN') : '-' }
 </script>
 
 <template>
@@ -169,6 +192,37 @@ function shortId(id) { return id?.slice(0, 8) }
     <section class="admin-replay card-surface">
       <div><span class="rail-icon"><UiIcon name="refresh" /></span><div><h2>重放 FAILED 事件</h2><p>仅 FAILED 状态的 Outbox 事件可以重放，尝试次数会被清零。</p></div></div>
       <form @submit.prevent="replay"><input v-model="eventId" type="number" min="1" placeholder="事件 ID" required><button class="primary-button" :disabled="replaying">{{ replaying ? '处理中…' : '确认重放' }}</button></form>
+    </section>
+    <section class="backfill-panel card-surface">
+      <div class="section-title"><div><h2>策略变更审计</h2><p>记录人工与自动策略切换、评估依据及关联回填任务。</p></div></div>
+      <form class="audit-filter" @submit.prevent="loadAudits(false)">
+        <input v-model="auditAuthorId" type="number" min="1" placeholder="作者用户 ID（可选）">
+        <select v-model="auditTriggerType" aria-label="审计触发类型">
+          <option value="">全部触发类型</option>
+          <option value="MANUAL_SET">人工设置</option>
+          <option value="MANUAL_SWITCH">人工切换</option>
+          <option value="MANUAL_RESET">人工重置</option>
+          <option value="AUTO_SCHEDULED">定时自动</option>
+          <option value="AUTO_ADMIN">管理员自动判定</option>
+        </select>
+        <button class="secondary-button" type="submit">查询审计</button>
+      </form>
+      <div v-if="!audits.length" class="empty-inline">暂无策略变更审计</div>
+      <div v-else class="backfill-list">
+        <article v-for="audit in audits" :key="audit.id" class="backfill-job">
+          <div class="backfill-heading">
+            <div><strong>作者 {{ audit.authorId }} · {{ audit.previousMode }} → {{ audit.targetMode }}</strong><small>#{{ audit.id }} · {{ audit.triggerType }} · {{ formatTime(audit.createdAt) }}</small></div>
+            <span class="status-pill">{{ sourceLabel(audit.previousSource) }} → {{ sourceLabel(audit.targetSource) }}</span>
+          </div>
+          <p v-if="audit.reason" class="backfill-error">{{ audit.reason }}</p>
+          <div class="backfill-stats">
+            <span>操作者 {{ audit.actorId || 'SYSTEM' }}</span>
+            <span>好友数 {{ audit.evaluatedFriendCount ?? '-' }}</span>
+            <span>回填 #{{ shortId(audit.backfillJobId) || '-' }}</span>
+          </div>
+        </article>
+      </div>
+      <button v-if="auditNextBeforeId" class="secondary-button" type="button" @click="loadAudits(true)">加载更多</button>
     </section>
     <section class="backfill-panel card-surface">
       <div class="section-title"><div><h2>Kafka 异常消息</h2><p>消费重试耗尽后进入 DLT 并持久化，可审计重放或人工丢弃。</p></div></div>

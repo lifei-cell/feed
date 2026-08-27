@@ -13,6 +13,9 @@ describe('AdminView Kafka dead-letter operations', () => {
       reads: 0, mismatches: 0, lastDuplicates: 0, sampleRate: 0,
     })
     vi.spyOn(endpoints, 'fanoutBackfills').mockResolvedValue([])
+    vi.spyOn(endpoints, 'fanoutPolicyAudits').mockResolvedValue({
+      items: [], nextBeforeId: null,
+    })
   })
 
   it('loads, replays and discards pending Kafka dead letters', async () => {
@@ -35,6 +38,42 @@ describe('AdminView Kafka dead-letter operations', () => {
     await flushPromises()
     expect(discard).toHaveBeenCalledWith(12, 'confirmed as non-replayable by operator')
     expect(wrapper.text()).toContain('暂无待处理 Kafka 死信')
+
+    wrapper.unmount()
+  })
+
+  it('loads, filters and refreshes fanout policy audits after automation', async () => {
+    endpoints.fanoutPolicyAudits.mockResolvedValueOnce({
+      items: [{
+        id: 31, authorId: 7, previousMode: 'PUSH', targetMode: 'PULL',
+        previousSource: null, targetSource: 'AUTO', triggerType: 'AUTO_SCHEDULED',
+        reason: 'automatic connection threshold: 12000', evaluatedFriendCount: 12000,
+        actorId: null, backfillJobId: '12345678-0000-0000-0000-000000000000',
+        createdAt: '2026-08-27T12:00:00Z',
+      }], nextBeforeId: null,
+    })
+    vi.spyOn(endpoints, 'kafkaDeadLetters').mockResolvedValue([])
+    vi.spyOn(endpoints, 'runFanoutAutomation').mockResolvedValue({
+      evaluatedThisRun: 1, backfillsCreatedThisRun: 1,
+    })
+    const wrapper = mount(AdminView)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('PUSH → PULL')
+    expect(wrapper.text()).toContain('AUTO_SCHEDULED')
+
+    await wrapper.find('.audit-filter input').setValue('7')
+    await wrapper.find('.audit-filter select').setValue('AUTO_ADMIN')
+    await wrapper.find('.audit-filter').trigger('submit')
+    await flushPromises()
+    expect(endpoints.fanoutPolicyAudits).toHaveBeenLastCalledWith(7, 'AUTO_ADMIN', null)
+
+    const automationButton = wrapper.findAll('button')
+      .find((button) => button.text().includes('立即执行自动判定'))
+    await automationButton.trigger('click')
+    await flushPromises()
+    expect(endpoints.runFanoutAutomation).toHaveBeenCalledOnce()
+    expect(endpoints.fanoutPolicyAudits).toHaveBeenLastCalledWith(7, 'AUTO_ADMIN', null)
 
     wrapper.unmount()
   })

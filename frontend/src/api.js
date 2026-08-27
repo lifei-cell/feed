@@ -224,6 +224,13 @@ export const endpoints = {
     return api(`/api/admin/fanout-backfills?${params}`)
   },
   fanoutBackfill: (id) => api(`/api/admin/fanout-backfills/${id}`),
+  fanoutPolicyAudits: (authorId = null, triggerType = null, beforeId = null, size = 20) => {
+    const params = new URLSearchParams({ size })
+    if (authorId) params.set('authorId', authorId)
+    if (triggerType) params.set('triggerType', triggerType)
+    if (beforeId) params.set('beforeId', beforeId)
+    return api(`/api/admin/fanout-policy-audits?${params}`)
+  },
   pauseFanoutBackfill: (id) => api(`/api/admin/fanout-backfills/${id}/pause`, { method: 'POST' }),
   resumeFanoutBackfill: (id) => api(`/api/admin/fanout-backfills/${id}/resume`, { method: 'POST' }),
   retryFanoutBackfill: (id) => api(`/api/admin/fanout-backfills/${id}/retry`, { method: 'POST' }),
