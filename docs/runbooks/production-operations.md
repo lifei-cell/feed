@@ -46,4 +46,13 @@
 
 ## 可观测栈
 
-使用 `OTLP_TRACING_ENABLED=true docker compose --profile observability up --build -d` 启动本地验收栈：Prometheus `:9090`、Alertmanager `:9093`、Jaeger `:16686`。生产环境应把 Alertmanager `default` receiver 替换为团队实际通知渠道。
+使用 `OTLP_TRACING_ENABLED=true docker compose --profile observability up --build -d` 启动本地验收栈：Prometheus `:9090`、Alertmanager `:9093`、Jaeger `:16686`、告警接收器 `:8090`。
+
+Alertmanager 默认把告警发送到 `alert-receiver`。该服务会以结构化日志记录告警；生产环境设置 `ALERT_FORWARD_URL` 将原始 Alertmanager Webhook 转发到团队通知网关，网关需要 Bearer 凭据时再通过 Secret 注入 `ALERT_FORWARD_BEARER_TOKEN`。转发失败会返回 `502`，Alertmanager 因而保留并重试通知，禁止把凭据直接提交到配置文件。
+
+发布验收使用独立 Compose Project，覆盖前端浏览器冒烟、监控组件就绪、Alertmanager Webhook 投递，以及 Kafka DLT 捕获、丢弃和重放：
+
+```bash
+RUN_E2E=true RUN_OBSERVABILITY_E2E=true RUN_DLT_E2E=true \
+  bash scripts/compose-smoke.sh
+```

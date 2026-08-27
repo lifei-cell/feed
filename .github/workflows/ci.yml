@@ -91,6 +91,8 @@ jobs:
       - run: mvn -B -DskipTests package
       - name: Validate production Compose and alert rules
         run: |
+          bash -n scripts/compose-smoke.sh scripts/dlt-replay-smoke.sh
+          python3 -m py_compile monitoring/alert_receiver.py
           docker compose --profile observability config -q
           docker run --rm -v "$PWD/monitoring:/work:ro" --entrypoint promtool prom/prometheus:v3.5.0 check rules /work/alerts.yml
           docker run --rm -v "$PWD/monitoring:/work:ro" --entrypoint amtool prom/alertmanager:v0.28.1 check-config /work/alertmanager.yml
@@ -100,6 +102,8 @@ jobs:
       - name: Run Compose smoke and browser E2E
         env:
           RUN_E2E: "true"
+          RUN_OBSERVABILITY_E2E: "true"
+          RUN_DLT_E2E: "true"
           COMPOSE_PROJECT_NAME: friend-feed-ci-${{ github.run_id }}
           JWT_SECRET: ci-only-secret-with-at-least-32-random-bytes
         run: bash scripts/compose-smoke.sh

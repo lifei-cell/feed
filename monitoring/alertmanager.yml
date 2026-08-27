@@ -1,9 +1,13 @@
 route:
-  receiver: default
+  receiver: friend-feed-operations-webhook
   group_by: [alertname]
-  group_wait: 30s
+  group_wait: 5s
   group_interval: 5m
   repeat_interval: 4h
 
 receivers:
-  - name: default
+  - name: friend-feed-operations-webhook
+    webhook_configs:
+      - url: http://alert-receiver:8090/alerts
+        send_resolved: true
+        max_alerts: 0

@@ -282,10 +282,11 @@ npm run quality
 cd frontend
 npx playwright install chromium
 cd ..
-RUN_E2E=true bash scripts/compose-smoke.sh
+RUN_E2E=true RUN_OBSERVABILITY_E2E=true RUN_DLT_E2E=true \
+  bash scripts/compose-smoke.sh
 ```
 
-`.github/workflows/ci.yml` 在 Push 和 Pull Request 上执行前端质量门禁、后端单元测试、Testcontainers 集成测试以及 Compose + Playwright E2E；Pull Request 还会阻止引入高危依赖。Dependabot 每周检查 Maven、npm 和 GitHub Actions 更新。
+`.github/workflows/ci.yml` 在 Push 和 Pull Request 上执行前端质量门禁、后端单元测试、Testcontainers 集成测试，以及 Compose + Playwright + 可观测栈 + DLT 重放验收；Pull Request 还会阻止引入高危依赖。Dependabot 每周检查 Maven、npm 和 GitHub Actions 更新。
 
 ## Outbox 与 Kafka 运维
 
@@ -338,7 +339,7 @@ curl -X POST http://localhost:8080/api/admin/kafka-dead-letters/123/discard \
 OTLP_TRACING_ENABLED=true docker compose --profile observability up --build -d
 ```
 
-Prometheus、Alertmanager、Jaeger UI 默认分别位于 `9090`、`9093`、`16686`。采样率由 `TRACING_SAMPLING_PROBABILITY` 控制。告警覆盖服务不可用、HTTP 5xx、JVM 堆、Outbox 积压/失败和 Kafka DLT 积压/老化；处置步骤见 [`docs/runbooks/production-operations.md`](docs/runbooks/production-operations.md)。
+Prometheus、Alertmanager、Jaeger UI 默认分别位于 `9090`、`9093`、`16686`。采样率由 `TRACING_SAMPLING_PROBABILITY` 控制。告警覆盖服务不可用、HTTP 5xx、JVM 堆、Outbox 积压/失败和 Kafka DLT 积压/老化，并由 `alert-receiver` 接收和记录；生产环境通过 `ALERT_FORWARD_URL` 与可选的 `ALERT_FORWARD_BEARER_TOKEN` 转发到团队通知网关。处置步骤见 [`docs/runbooks/production-operations.md`](docs/runbooks/production-operations.md)。
 
 ## 混合扩散第三阶段
 

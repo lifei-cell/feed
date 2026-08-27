@@ -194,6 +194,27 @@ services:
       - alertmanager-data:/alertmanager
     ports:
       - "${ALERTMANAGER_PORT:-9093}:9093"
+    depends_on:
+      alert-receiver:
+        condition: service_healthy
+
+  alert-receiver:
+    image: python:3.13-alpine
+    profiles: [observability]
+    command: ["python", "/app/alert_receiver.py"]
+    environment:
+      ALERT_FORWARD_URL: ${ALERT_FORWARD_URL:-}
+      ALERT_FORWARD_BEARER_TOKEN: ${ALERT_FORWARD_BEARER_TOKEN:-}
+    volumes:
+      - ./monitoring/alert_receiver.py:/app/alert_receiver.py:ro
+    ports:
+      - "${ALERT_RECEIVER_PORT:-8090}:8090"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8090/health', timeout=2).read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.130.1
